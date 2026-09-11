@@ -325,55 +325,80 @@ with tabs[1]:
 
     sns.set_style("whitegrid")
 
-    st.markdown("#### Boxplots — Measured Value (Val)")
-    st.caption("Distribution of the actual measured value per parameter, with IQR bounds marked.")
+    st.markdown("#### Boxplots — Statistical (IQR) View vs Spec Range View")
+    st.caption("Left: measured value distribution with statistical IQR bounds (Q1 − 1.5·IQR / Q3 + 1.5·IQR). "
+               "Right: the same values against the fixed spec Min/Max — points outside the spec band are outliers.")
     for p, cols in param_cols.items():
         val_col = cols["Val"]
+        min_col, max_col = cols["Min"], cols["Max"]
         if val_col is None:
             continue
+
         series = pd.to_numeric(df_raw[val_col], errors="coerce").dropna()
         row = iqr_df[iqr_df["Parameter"] == p]
 
-        c1, c2 = st.columns([1, 1])
+        c1, c2 = st.columns(2)
 
+        # ---- LEFT: original IQR statistical boxplot ----
         with c1:
-            fig, ax = plt.subplots(figsize=(4, 3.5))
+            fig, ax = plt.subplots(figsize=(4.5, 3.6))
             sns.boxplot(y=series, ax=ax, color="#6366f1", width=0.35, fliersize=4)
-            sns.stripplot(y=series, ax=ax, color="#312e81", size=3, alpha=0.4, jitter=0.15)
+            sns.stripplot(y=series, ax=ax, color="#312e81", size=3, alpha=0.35, jitter=0.15)
             if not row.empty:
                 ax.axhline(row["Lower Bound"].values[0], color="red", linestyle="--", linewidth=1,
-                           label="Lower Bound")
+                           label="IQR Lower Bound")
                 ax.axhline(row["Upper Bound"].values[0], color="red", linestyle="--", linewidth=1,
-                           label="Upper Bound")
+                           label="IQR Upper Bound")
                 ax.legend(fontsize=7, loc="best")
-            ax.set_title(f"{p} — Val", fontsize=10)
+            ax.set_title(f"{p} — IQR View", fontsize=10)
             ax.set_ylabel("Value", fontsize=9)
             fig.tight_layout()
             st.pyplot(fig)
             plt.close(fig)
 
-        # ---- second boxplot: spec range (Min & Max) distribution for this parameter ----
-        min_col, max_col = cols["Min"], cols["Max"]
+        # ---- RIGHT: spec Min/Max range band with in/out-of-spec points ----
+        spec_min = spec_max = None
+        if min_col and min_col in df_raw.columns:
+            mn_series = pd.to_numeric(df_raw[min_col], errors="coerce").dropna()
+            if not mn_series.empty:
+                spec_min = mn_series.mode().iloc[0]  # constant across rows -> mode is safe
+        if max_col and max_col in df_raw.columns:
+            mx_series = pd.to_numeric(df_raw[max_col], errors="coerce").dropna()
+            if not mx_series.empty:
+                spec_max = mx_series.mode().iloc[0]
+
+        if spec_min is not None and spec_max is not None:
+            status = np.where((series < spec_min) | (series > spec_max), "Out of Spec", "In Spec")
+        else:
+            status = np.array(["In Spec"] * len(series))
+
+        plot_df = pd.DataFrame({"Parameter": p, "Value": series.values, "Status": status})
+
         with c2:
-            if min_col and max_col and min_col in df_raw.columns and max_col in df_raw.columns:
-                mn = pd.to_numeric(df_raw[min_col], errors="coerce").dropna()
-                mx = pd.to_numeric(df_raw[max_col], errors="coerce").dropna()
-                range_df = pd.DataFrame({
-                    "Limit": ["Min"] * len(mn) + ["Max"] * len(mx),
-                    "Value": pd.concat([mn, mx], ignore_index=True),
-                })
-                fig2, ax2 = plt.subplots(figsize=(4, 3.5))
-                sns.boxplot(data=range_df, x="Limit", y="Value", ax=ax2,
-                            palette={"Min": "#f59e0b", "Max": "#0ea5e9"}, width=0.4, fliersize=4)
-                sns.stripplot(data=range_df, x="Limit", y="Value", ax=ax2,
-                              color="black", size=3, alpha=0.3, jitter=0.15)
-                ax2.set_title(f"{p} — Spec Min/Max Range", fontsize=10)
-                ax2.set_ylabel("Value", fontsize=9)
-                fig2.tight_layout()
-                st.pyplot(fig2)
-                plt.close(fig2)
-            else:
-                st.info(f"No Min/Max columns found for {p}.")
+            fig2, ax2 = plt.subplots(figsize=(4.5, 3.6))
+            if spec_min is not None and spec_max is not None:
+                ax2.axhspan(spec_min, spec_max, color="#bbf7d0", alpha=0.4, zorder=0, label="Spec Range (Min–Max)")
+                ax2.axhline(spec_min, color="#059669", linestyle="--", linewidth=1.2)
+                ax2.axhline(spec_max, color="#059669", linestyle="--", linewidth=1.2)
+
+            sns.boxplot(y=series, ax=ax2, color="#a5b4fc", width=0.3, fliersize=0, zorder=1)
+            sns.stripplot(
+                data=plot_df, y="Value", hue="Status", ax=ax2,
+                palette={"In Spec": "#1e3a8a", "Out of Spec": "#dc2626"},
+                size=4, alpha=0.7, jitter=0.15, zorder=2,
+            )
+            n_out = int((status == "Out of Spec").sum())
+            ax2.set_title(f"{p} — Spec Range View (out-of-spec={n_out})", fontsize=10)
+            ax2.set_ylabel("Value", fontsize=9)
+            ax2.legend(fontsize=7, loc="best")
+            fig2.tight_layout()
+            st.pyplot(fig2)
+            plt.close(fig2)
+
+        if spec_min is not None and spec_max is not None:
+            st.caption(f"**{p}** — Spec: Min = {spec_min}, Max = {spec_max} · {n_out} of {len(series)} "
+                       f"values fall outside the spec range.")
+        st.markdown("---")
 
     st.markdown("#### Value Trend Across Samples")
     sel_param = st.selectbox("Choose parameter to trend", list(param_cols.keys()))
